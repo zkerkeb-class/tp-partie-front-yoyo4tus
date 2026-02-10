@@ -23,15 +23,89 @@ const getGeneration = (id) => {
   return 'Gen 8+';
 };
 
-// Pokémon rares (légendaires avec stats totales > 550)
+// Pokémon rares
 const isRare = (pokemon) => {
   const totalStats = Object.values(pokemon.base).reduce((a, b) => a + b, 0);
   return totalStats > 550;
 };
 
+// Table des faiblesses par type
+const TYPE_EFFECTIVENESS = {
+  Normal: { weakTo: ['Fighting'], resistantTo: [], immuneTo: ['Ghost'] },
+  Fire: { weakTo: ['Water', 'Ground', 'Rock'], resistantTo: ['Fire', 'Grass', 'Ice', 'Bug', 'Steel', 'Fairy'], immuneTo: [] },
+  Water: { weakTo: ['Electric', 'Grass'], resistantTo: ['Fire', 'Water', 'Ice', 'Steel'], immuneTo: [] },
+  Electric: { weakTo: ['Ground'], resistantTo: ['Electric', 'Flying', 'Steel'], immuneTo: [] },
+  Grass: { weakTo: ['Fire', 'Ice', 'Poison', 'Flying', 'Bug'], resistantTo: ['Water', 'Electric', 'Grass', 'Ground'], immuneTo: [] },
+  Ice: { weakTo: ['Fire', 'Fighting', 'Rock', 'Steel'], resistantTo: ['Ice'], immuneTo: [] },
+  Fighting: { weakTo: ['Flying', 'Psychic', 'Fairy'], resistantTo: ['Bug', 'Rock', 'Dark'], immuneTo: [] },
+  Poison: { weakTo: ['Ground', 'Psychic'], resistantTo: ['Grass', 'Fighting', 'Poison', 'Bug', 'Fairy'], immuneTo: [] },
+  Ground: { weakTo: ['Water', 'Grass', 'Ice'], resistantTo: ['Poison', 'Rock'], immuneTo: ['Electric'] },
+  Flying: { weakTo: ['Electric', 'Ice', 'Rock'], resistantTo: ['Grass', 'Fighting', 'Bug'], immuneTo: ['Ground'] },
+  Psychic: { weakTo: ['Bug', 'Ghost', 'Dark'], resistantTo: ['Fighting', 'Psychic'], immuneTo: [] },
+  Bug: { weakTo: ['Fire', 'Flying', 'Rock'], resistantTo: ['Grass', 'Fighting', 'Ground'], immuneTo: [] },
+  Rock: { weakTo: ['Water', 'Grass', 'Fighting', 'Ground', 'Steel'], resistantTo: ['Normal', 'Fire', 'Poison', 'Flying'], immuneTo: [] },
+  Ghost: { weakTo: ['Ghost', 'Dark'], resistantTo: ['Poison', 'Bug'], immuneTo: ['Normal', 'Fighting'] },
+  Dragon: { weakTo: ['Ice', 'Dragon', 'Fairy'], resistantTo: ['Fire', 'Water', 'Electric', 'Grass'], immuneTo: [] },
+  Dark: { weakTo: ['Fighting', 'Bug', 'Fairy'], resistantTo: ['Ghost', 'Dark'], immuneTo: ['Psychic'] },
+  Steel: { weakTo: ['Fire', 'Fighting', 'Ground'], resistantTo: ['Normal', 'Grass', 'Ice', 'Flying', 'Psychic', 'Bug', 'Rock', 'Dragon', 'Steel', 'Fairy'], immuneTo: ['Poison'] },
+  Fairy: { weakTo: ['Poison', 'Steel'], resistantTo: ['Fighting', 'Bug', 'Dark'], immuneTo: ['Dragon'] }
+};
+
+// Fonction pour obtenir tous les counters d'un pokémon
+const getCounters = (pokemon, allPokemons) => {
+  const weaknesses = [];
+  
+  pokemon.type.forEach(type => {
+    const typeData = TYPE_EFFECTIVENESS[type];
+    if (typeData) {
+      weaknesses.push(...typeData.weakTo);
+    }
+  });
+  
+  const uniqueWeaknesses = [...new Set(weaknesses)];
+  
+  const counters = allPokemons.filter(p => 
+    p._id !== pokemon._id && 
+    p.type.some(t => uniqueWeaknesses.includes(t))
+  ).slice(0, 6);
+  
+  return { weaknesses: uniqueWeaknesses, counters };
+};
+
+// Fonction pour obtenir le dresseur selon le type principal
+const getTrainer = (pokemon) => {
+  const type = pokemon.type[0].toLowerCase();
+  
+  // IDs des dresseurs dans PokeAPI
+  const trainerIds = {
+    fire: 'blaine',
+    water: 'misty',
+    grass: 'erika',
+    electric: 'lt-surge',
+    psychic: 'sabrina',
+    fighting: 'bruno',
+    rock: 'brock',
+    ground: 'giovanni',
+    poison: 'koga',
+    ghost: 'morty',
+    ice: 'pryce',
+    dragon: 'lance',
+    bug: 'bugsy',
+    steel: 'jasmine',
+    flying: 'falkner',
+    normal: 'whitney',
+    dark: 'karen',
+    fairy: 'valerie'
+  };
+  
+  const trainerId = trainerIds[type] || 'red';
+  
+  // Utiliser l'API officielle Pokémon pour les sprites
+  return `https://img.pokemondb.net/sprites/black-white/normal/${trainerId}.png`;
+};
+
 // Sons
 const playSound = (type) => {
-  // On simule des sons avec des fréquences
   const audioContext = new (window.AudioContext || window.webkitAudioContext)();
   const oscillator = audioContext.createOscillator();
   const gainNode = audioContext.createGain();
@@ -52,7 +126,7 @@ const playSound = (type) => {
 };
 
 function App() {
-  // États existants
+  // États
   const [pokemons, setPokemons] = useState([]);
   const [allPokemons, setAllPokemons] = useState([]);
   const [page, setPage] = useState(1);
@@ -76,8 +150,20 @@ function App() {
   const [compareMode, setCompareMode] = useState(false);
   const [compareList, setCompareList] = useState([]);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [uploadedImage, setUploadedImage] = useState(null);
+  const [showWeaknesses, setShowWeaknesses] = useState(false);
+  const [viewMode, setViewMode] = useState(() => {
+    return localStorage.getItem('viewMode') || 'list';
+  });
+  const [showCircleTransition, setShowCircleTransition] = useState(false);
+  const [filteredPokemons, setFilteredPokemons] = useState([]); // Pokémons filtrés
+  const [musicEnabled, setMusicEnabled] = useState(() => {
+    const saved = localStorage.getItem('musicEnabled');
+    return saved === 'true';
+  });
+  const [audioPlayer, setAudioPlayer] = useState(null);
 
-  // Sauvegarder les favoris dans localStorage
+  // Sauvegarder les favoris
   useEffect(() => {
     localStorage.setItem('pokemonFavorites', JSON.stringify(favorites));
   }, [favorites]);
@@ -92,9 +178,59 @@ function App() {
     }
   }, [darkMode]);
 
+  // Sauvegarder le mode d'affichage
+  useEffect(() => {
+    localStorage.setItem('viewMode', viewMode);
+  }, [viewMode]);
+
+  // Gérer la musique
+  useEffect(() => {
+    localStorage.setItem('musicEnabled', musicEnabled);
+    
+    if (musicEnabled) {
+      if (!audioPlayer) {
+        const audio = new Audio();
+        
+        // Musique Pokémon - Thème principal (fichier qui fonctionne)
+        // Alternative : mettez votre propre fichier MP3 dans public/music.mp3
+        audio.src = '/music.mp3'; // Vous devrez ajouter ce fichier
+        audio.loop = true;
+        audio.volume = 0.15;
+        
+        // Tenter de jouer
+        audio.play()
+          .then(() => {
+            console.log('🎵 Musique lancée !');
+            setAudioPlayer(audio);
+          })
+          .catch(() => {
+            console.log('⚠️ Cliquez n\'importe où pour activer la musique');
+            // Attendre interaction utilisateur
+            const startAudio = () => {
+              audio.play().then(() => setAudioPlayer(audio));
+              document.removeEventListener('click', startAudio);
+            };
+            document.addEventListener('click', startAudio, { once: true });
+          });
+      }
+    } else if (!musicEnabled && audioPlayer) {
+      audioPlayer.pause();
+      audioPlayer.currentTime = 0;
+      setAudioPlayer(null);
+    }
+    
+    return () => {
+      if (audioPlayer && !musicEnabled) {
+        audioPlayer.pause();
+      }
+    };
+  }, [musicEnabled]);
+
   // Charger les pokemons
   useEffect(() => {
-    if (selectedType === 'Tous') {
+    if (selectedType === 'Favoris') {
+      filterFavorites();
+    } else if (selectedType === 'Tous') {
       fetchPokemons();
     } else {
       filterByType(selectedType);
@@ -104,38 +240,60 @@ function App() {
   const fetchPokemons = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}?page=${page}`);
+      // Charger TOUS les pokémons pour le filtre "Tous"
+      const res = await fetch(`${API}?page=1&limit=10000`);
       const data = await res.json();
-      setPokemons(data.pokemons);
+      
+      // Stocker TOUS les pokémons
       setAllPokemons(data.pokemons);
-      setTotalPages(data.totalPages);
+      
+      // Afficher seulement les 20 premiers
+      const limit = 20;
+      const start = (page - 1) * limit;
+      const end = start + limit;
+      const paginated = data.pokemons.slice(start, end);
+      
+      setPokemons(paginated);
+      setTotalPages(Math.ceil(data.pokemons.length / limit));
     } catch (error) {
       alert('❌ Erreur de chargement');
     }
     setLoading(false);
   };
 
-  const filterByType = async (type) => {
+  // MODIFIÉ: Filtre sur TOUS les pokémons (déjà chargés)
+  const filterByType = (type) => {
     setLoading(true);
-    try {
-      const res = await fetch(`${API}?page=1&limit=1000`);
-      const data = await res.json();
-      
-      const filtered = data.pokemons.filter(pokemon => 
-        pokemon.type.includes(type)
-      );
-      
-      const limit = 20;
-      const start = (page - 1) * limit;
-      const end = start + limit;
-      const paginatedFiltered = filtered.slice(start, end);
-      
-      setPokemons(paginatedFiltered);
-      setAllPokemons(filtered);
-      setTotalPages(Math.ceil(filtered.length / limit));
-    } catch (error) {
-      alert('❌ Erreur de filtrage');
-    }
+    
+    // Filtrer depuis allPokemons (tous les pokémons chargés)
+    const filtered = allPokemons.filter(pokemon => 
+      pokemon.type.includes(type)
+    );
+    
+    // Sauvegarder les filtrés
+    setFilteredPokemons(filtered);
+    
+    // Afficher TOUS les résultats filtrés (pas de pagination)
+    setPokemons(filtered);
+    setTotalPages(1); // Une seule page avec tout
+    setPage(1);
+    setLoading(false);
+  };
+
+  // NOUVEAU: Filtre favoris (depuis allPokemons déjà chargés)
+  const filterFavorites = () => {
+    setLoading(true);
+    
+    // Filtrer TOUS les favoris
+    const favPokemons = allPokemons.filter(p => favorites.includes(p._id));
+    
+    // Sauvegarder les filtrés
+    setFilteredPokemons(favPokemons);
+    
+    // Afficher TOUS les favoris (pas de pagination)
+    setPokemons(favPokemons);
+    setTotalPages(1); // Une seule page avec tout
+    setPage(1);
     setLoading(false);
   };
 
@@ -197,6 +355,8 @@ function App() {
         setSelectedPokemon(null);
         if (selectedType === 'Tous') {
           fetchPokemons();
+        } else if (selectedType === 'Favoris') {
+          filterFavorites();
         } else {
           filterByType(selectedType);
         }
@@ -218,6 +378,8 @@ function App() {
         setSelectedPokemon(null);
         if (selectedType === 'Tous') {
           fetchPokemons();
+        } else if (selectedType === 'Favoris') {
+          filterFavorites();
         } else {
           filterByType(selectedType);
         }
@@ -247,7 +409,7 @@ function App() {
         SpecialDefense: parseInt(form.get('spdefense')),
         Speed: parseInt(form.get('speed'))
       },
-      image: form.get('image') || 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/0.png'
+      image: uploadedImage || form.get('image') || 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/0.png'
     };
 
     try {
@@ -260,6 +422,7 @@ function App() {
       if (res.ok) {
         alert('✅ Pokemon créé !');
         setIsCreating(false);
+        setUploadedImage(null);
         setSelectedType('Tous');
         setPage(1);
         fetchPokemons();
@@ -288,7 +451,6 @@ function App() {
     setSearchTerm('');
   };
 
-  // Fonctions favoris
   const toggleFavorite = (pokemonId) => {
     if (soundEnabled) playSound('click');
     setFavorites(prev => 
@@ -300,7 +462,6 @@ function App() {
 
   const isFavorite = (pokemonId) => favorites.includes(pokemonId);
 
-  // Fonctions comparaison
   const handleCompareSelect = (pokemonId) => {
     if (compareList.length >= 2) {
       alert('Vous pouvez comparer seulement 2 pokémons à la fois');
@@ -309,7 +470,16 @@ function App() {
     
     const pokemon = pokemons.find(p => p._id === pokemonId);
     if (pokemon && !compareList.find(p => p._id === pokemonId)) {
-      setCompareList([...compareList, pokemon]);
+      const newList = [...compareList, pokemon];
+      setCompareList(newList);
+      
+      // Transition cercle quand 2 pokémons sélectionnés
+      if (newList.length === 2) {
+        setShowCircleTransition(true);
+        setTimeout(() => {
+          setShowCircleTransition(false);
+        }, 1500); // 1.5s pour animation plus lente
+      }
     }
   };
 
@@ -318,7 +488,18 @@ function App() {
     setCompareMode(false);
   };
 
-  // Composant Radar Chart (simplifié avec SVG)
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setUploadedImage(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Composant Radar Chart
   const RadarChart = ({ pokemon }) => {
     const stats = pokemon.base;
     const statNames = ['HP', 'Attack', 'Defense', 'Sp.Atk', 'Sp.Def', 'Speed'];
@@ -342,7 +523,6 @@ function App() {
     
     return (
       <svg viewBox="0 0 200 200" className="radar-chart">
-        {/* Grille */}
         {[0.25, 0.5, 0.75, 1].map((scale, i) => (
           <polygon
             key={i}
@@ -358,7 +538,6 @@ function App() {
           />
         ))}
         
-        {/* Lignes */}
         {angles.map((angle, i) => (
           <line
             key={i}
@@ -371,16 +550,14 @@ function App() {
           />
         ))}
         
-        {/* Stats */}
         <polygon
           points={points}
-          fill={`var(--type-${pokemon.type[0].toLowerCase()})`}
+          fill="#667eea"
           fillOpacity="0.3"
-          stroke={`var(--type-${pokemon.type[0].toLowerCase()})`}
+          stroke="#667eea"
           strokeWidth="2"
         />
         
-        {/* Labels */}
         {statNames.map((name, i) => {
           const labelRadius = radius + 20;
           const x = centerX + labelRadius * Math.cos(angles[i]);
@@ -411,6 +588,9 @@ function App() {
     
     return (
       <div className="app">
+        {/* Transition cercle */}
+        {showCircleTransition && <div className="circle-transition" />}
+        
         <header className="header">
           <button onClick={clearComparison}>← Retour</button>
           <h2>⚔️ Comparaison</h2>
@@ -424,6 +604,13 @@ function App() {
                 <img src={pokemon.image} alt={pokemon.name.english} />
                 <h2>{pokemon.name.english}</h2>
                 <p className="pokemon-id">#{pokemon.id}</p>
+                
+                {/* Dresseur */}
+                <div className="trainer-badge">
+                  <img src={getTrainer(pokemon)} alt="Dresseur" className="trainer-image" />
+                  <p className="trainer-label">Dresseur {pokemon.type[0]}</p>
+                </div>
+                
                 <div className="types">
                   {pokemon.type.map((type, i) => (
                     <span key={i} className={`type ${type.toLowerCase()}`}>
@@ -444,10 +631,7 @@ function App() {
                     <div className="stat-bar-container">
                       <div
                         className="stat-bar-fill"
-                        style={{
-                          width: `${(value / 255) * 100}%`,
-                          backgroundColor: `var(--type-${pokemon.type[0].toLowerCase()})`
-                        }}
+                        style={{ width: `${(value / 255) * 100}%` }}
                       />
                       <span className="stat-value">{value}</span>
                     </div>
@@ -482,18 +666,7 @@ function App() {
   // ========================================
   if (!selectedPokemon && !isCreating) {
     return (
-      <div className={`app type-bg-${selectedType.toLowerCase()}`}>
-        {/* Particules animées */}
-        <div className="particles">
-          {[...Array(20)].map((_, i) => (
-            <div key={i} className="particle" style={{
-              left: `${Math.random() * 100}%`,
-              animationDelay: `${Math.random() * 5}s`,
-              animationDuration: `${5 + Math.random() * 10}s`
-            }} />
-          ))}
-        </div>
-
+      <div className="app">
         <header className="header">
           <h1>🔴 Pokédex</h1>
           
@@ -513,6 +686,13 @@ function App() {
               {soundEnabled ? '🔊' : '🔇'}
             </button>
             <button
+              className={`icon-btn ${musicEnabled ? 'active' : ''}`}
+              onClick={() => setMusicEnabled(!musicEnabled)}
+              title="Musique"
+            >
+              {musicEnabled ? '🎵' : '🎶'}
+            </button>
+            <button
               className={`icon-btn ${compareMode ? 'active' : ''}`}
               onClick={() => {
                 setCompareMode(!compareMode);
@@ -522,6 +702,24 @@ function App() {
             >
               ⚔️
             </button>
+            
+            {/* MODES D'AFFICHAGE */}
+            <div className="view-mode-controls">
+              <button
+                className={`icon-btn ${viewMode === 'list' ? 'active' : ''}`}
+                onClick={() => setViewMode('list')}
+                title="Mode Liste"
+              >
+                📋
+              </button>
+              <button
+                className={`icon-btn ${viewMode === 'grid' ? 'active' : ''}`}
+                onClick={() => setViewMode('grid')}
+                title="Mode Grille"
+              >
+                ⊞
+              </button>
+            </div>
           </div>
 
           <div className="search-bar">
@@ -559,6 +757,15 @@ function App() {
         )}
 
         <div className="type-filters">
+          {/* NOUVEAU: Bouton Favoris */}
+          <button
+            className={`type-filter-btn ${selectedType === 'Favoris' ? 'active' : ''}`}
+            style={{ background: '#ef4444' }}
+            onClick={() => handleTypeChange('Favoris')}
+          >
+            ❤️ Favoris
+          </button>
+          
           {POKEMON_TYPES.map((type) => (
             <button
               key={type}
@@ -575,7 +782,7 @@ function App() {
 
         {selectedType !== 'Tous' && !loading && (
           <div className="filter-info">
-            🔍 Filtré par type: <strong>{selectedType}</strong> ({allPokemons.length} pokémons)
+            🔍 Filtré par {selectedType === 'Favoris' ? 'Favoris' : `type: ${selectedType}`} ({filteredPokemons.length} pokémons au total)
           </div>
         )}
 
@@ -583,7 +790,7 @@ function App() {
 
         {!loading && (
           <>
-            <div className="grid">
+            <div className={`grid ${viewMode === 'grid' ? 'grid-mode' : ''}`}>
               {pokemons.map((pokemon) => (
                 <div
                   key={pokemon._id}
@@ -640,7 +847,7 @@ function App() {
               ))}
             </div>
 
-            {!searchTerm && pokemons.length > 0 && totalPages > 1 && (
+            {!searchTerm && pokemons.length > 0 && totalPages > 1 && selectedType === 'Tous' && (
               <div className="pagination">
                 <button
                   onClick={() => setPage(page - 1)}
@@ -659,7 +866,9 @@ function App() {
             )}
 
             {pokemons.length === 0 && !loading && (
-              <div className="no-results">Aucun pokemon trouvé</div>
+              <div className="no-results">
+                {selectedType === 'Favoris' ? 'Aucun favori. Ajoutez des pokémons en cliquant sur ❤️' : 'Aucun pokemon trouvé'}
+              </div>
             )}
           </>
         )}
@@ -697,7 +906,7 @@ function App() {
 
         <div className="detail">
           <div className="detail-image">
-            <div className={`pokemon-display ${isRare(selectedPokemon) ? 'rare-display' : ''}`}>
+            <div className="pokemon-display">
               <img
                 src={selectedPokemon.image}
                 alt={selectedPokemon.name.english}
@@ -708,6 +917,13 @@ function App() {
             </div>
             <p className="pokemon-id">#{selectedPokemon.id}</p>
             <span className="generation-badge-large">{getGeneration(selectedPokemon.id)}</span>
+            
+            {/* Dresseur */}
+            <div className="trainer-badge">
+              <img src={getTrainer(selectedPokemon)} alt="Dresseur" className="trainer-image" />
+              <p className="trainer-label">Dresseur {selectedPokemon.type[0]}</p>
+            </div>
+            
             <div className="types">
               {selectedPokemon.type.map((type, i) => (
                 <span key={i} className={`type ${type.toLowerCase()}`}>
@@ -719,6 +935,90 @@ function App() {
             <div className="radar-container">
               <h4>Graphique des Stats</h4>
               <RadarChart pokemon={selectedPokemon} />
+            </div>
+
+            {/* Section Faiblesses et Counters */}
+            <div className="weaknesses-section">
+              <button 
+                className="btn-weaknesses"
+                onClick={() => setShowWeaknesses(!showWeaknesses)}
+              >
+                {showWeaknesses ? '▼' : '▶'} Faiblesses & Counters
+              </button>
+              
+              {showWeaknesses && (
+                <div className="weaknesses-content">
+                  {selectedPokemon.type.map(type => {
+                    const typeData = TYPE_EFFECTIVENESS[type];
+                    if (!typeData) return null;
+                    
+                    return (
+                      <div key={type} className="type-weaknesses">
+                        <h5>Type {type}</h5>
+                        
+                        {typeData.weakTo.length > 0 && (
+                          <div className="weakness-row">
+                            <strong>⚠️ Faible contre :</strong>
+                            <div className="types">
+                              {typeData.weakTo.map(t => (
+                                <span key={t} className={`type ${t.toLowerCase()}`}>{t}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {typeData.resistantTo.length > 0 && (
+                          <div className="weakness-row">
+                            <strong>🛡️ Résistant à :</strong>
+                            <div className="types">
+                              {typeData.resistantTo.map(t => (
+                                <span key={t} className={`type ${t.toLowerCase()}`}>{t}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {typeData.immuneTo.length > 0 && (
+                          <div className="weakness-row">
+                            <strong>❌ Immunisé contre :</strong>
+                            <div className="types">
+                              {typeData.immuneTo.map(t => (
+                                <span key={t} className={`type ${t.toLowerCase()}`}>{t}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  
+                  <div className="counters-section">
+                    <h5>🎯 Meilleurs Counters</h5>
+                    <p className="counters-hint">Ces pokémons sont efficaces contre {selectedPokemon.name.english}</p>
+                    <div className="counters-grid">
+                      {getCounters(selectedPokemon, allPokemons).counters.map(counter => (
+                        <div 
+                          key={counter._id} 
+                          className="counter-card"
+                          onClick={() => fetchPokemon(counter._id)}
+                        >
+                          <img src={counter.image} alt={counter.name.english} />
+                          <div className="counter-info">
+                            <p className="counter-name">{counter.name.english}</p>
+                            <div className="types">
+                              {counter.type.map((type, i) => (
+                                <span key={i} className={`type ${type.toLowerCase()}`}>
+                                  {type}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -822,6 +1122,35 @@ function App() {
         <div className="form-group">
           <label>Image URL</label>
           <input name="image" placeholder="https://..." />
+        </div>
+
+        <div className="form-group">
+          <label>OU Upload une image depuis votre PC 📸</label>
+          <div className="image-upload-container">
+            <input 
+              type="file" 
+              accept="image/*" 
+              onChange={handleImageUpload}
+              id="image-upload"
+              className="image-upload-input"
+            />
+            <label htmlFor="image-upload" className="image-upload-label">
+              {uploadedImage ? '✓ Image chargée' : '📁 Choisir une image'}
+            </label>
+            {uploadedImage && (
+              <div className="image-preview">
+                <img src={uploadedImage} alt="Preview" />
+                <button 
+                  type="button"
+                  onClick={() => setUploadedImage(null)}
+                  className="remove-image-btn"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+          </div>
+          <p className="upload-hint">L'image uploadée remplacera l'URL ci-dessus</p>
         </div>
 
         <h3>Stats de Base</h3>
